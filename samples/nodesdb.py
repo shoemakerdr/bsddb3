@@ -22,6 +22,43 @@ def get_secondary_key(key, data):
     return _key
 
 
+def get_third_key(key, data):
+    _key = db.DB_DONOTINDEX
+    try:
+        _data = json.loads(data)
+        _key = _data.get('no').encode('utf-8')
+    except e:
+        pass
+    return _key
+
+
+def cmp_func(key1, key2):
+    print 'cmp_func'
+    if key1 > key2:
+        return -1
+    if key1 < key2:
+        return 1
+    return 0
+
+
+def cmp_dup_func_secondary(key1, key2):
+    print 'cmp_dup_func_secondary'
+    if key1 > key2:
+        return -1
+    if key1 < key2:
+        return 1
+    return 0
+
+
+def cmp_dup_func_third(key1, key2):
+    print 'cmp_dup_func_third'
+    if key1 > key2:
+        return -1
+    if key1 < key2:
+        return 1
+    return 0
+
+
 class NodesDB(object):
     def __init__(self, filename="nodes", homedir='storage/data'):
         self.filename = filename + '.db'
@@ -31,6 +68,7 @@ class NodesDB(object):
         self.dbflags = 0
         self.primary = None
         self.secondary = None
+        self.thrid = None
         self.txn = None
 
     def open(self):
@@ -40,18 +78,29 @@ class NodesDB(object):
         # self.txn = self.env.txn_begin()
 
         self.primary = db.DB(self.env)
+        self.primary.set_bt_compare(cmp_func)
         self.primary.open(self.filename, "primary", db.DB_BTREE,
                           db.DB_CREATE | db.DB_THREAD | self.dbflags,
                           txn=self.txn)
 
         self.secondary = db.DB(self.env)
-        self.secondary.set_flags(db.DB_DUP)
-        self.secondary.set_get_returns_none(2)
+        self.secondary.set_flags(db.DB_DUPSORT)
+        self.secondary.set_dup_compare(cmp_dup_func_secondary)
         self.secondary.open(self.filename, "secondary", db.DB_BTREE,
                             db.DB_CREATE | db.DB_THREAD | self.dbflags,
                             txn=self.txn)
 
         self.primary.associate(self.secondary, get_secondary_key,
+                               db.DB_CREATE, txn=self.txn)
+
+        self.third = db.DB(self.env)
+        self.third.set_flags(db.DB_DUPSORT)
+        self.third.set_dup_compare(cmp_dup_func_third)
+        self.third.open(self.filename, "third", db.DB_BTREE,
+                        db.DB_CREATE | db.DB_THREAD | self.dbflags,
+                        txn=self.txn)
+
+        self.primary.associate(self.third, get_third_key,
                                db.DB_CREATE, txn=self.txn)
 
     def add_node(self, key, data):
@@ -66,8 +115,8 @@ class NodesDB(object):
     def get_nodes_by_uid(self, uid, start=-1, limit=-1):
         return self.secondary.pget(uid, dlen=limit, doff=start)
 
-    def del_nodes_by_uid(self, uid):
-        pass
+    def get_nodes_by_no(self, no, start=-1, limit=-1):
+        return self.third.pget(no, dlen=limit, doff=start)
 
     def commit(self):
         return self.txn and self.txn.commit()
@@ -91,44 +140,57 @@ if __name__ == '__main__':
     nodesdb = NodesDB()
     nodesdb.open()
 
-    count = 10
     timestamp = int(time.time())*100
 
-    def create_kv():
-        return (str(timestamp + random.randint(1, 100)),
-                {'uid': str(random.randint(1, 3)), 'info': 'a little info'})
+    def create_kv(count):
+        id = str(timestamp + random.randint(1, 100))
+        return (id,
+                {'id': id,
+                 'no': str(count),
+                 'uid': str(random.randint(1, 3)),
+                 'info': 'a little info'})
 
-    datas = {}
+    datas = []
     _key = None
-    _val = None
-    while count >= 0:
-        key, val = create_kv()
+    _uid = None
+    _no = None
+    count = 0
+    while count <= 20:
+        key, val = create_kv(count)
         if key in datas:
             continue
         _key = key
         _uid = val.get('uid')
-        datas[key] = val
-        count -= 1
-    print datas
+        _no = val.get('no')
+        datas.append((key, val))
+        count += 1
     # add_node
-    for k, v in datas.items():
-        nodesdb.add_node(k, json.dumps(v))
+    for node in datas:
+        nodesdb.add_node(node[0], json.dumps(node[1]))
+    print datas
+    print "#"*20
 
     # get_node
-    for k,  v in datas.items():
-        print 'v:', v
-        print nodesdb.get_node(k)
+    for node in datas:
+        print node[0],  node[1], nodesdb.get_node(node[0])
+    print "#"*20
 
-    # nodesdb.commit()
     # get_nodes_by_uid
-    for k, v in datas.items():
-        uid = v.get('uid')
-        print nodesdb.get_nodes_by_uid(uid)
-        print "#"*10
+    print nodesdb.get_nodes_by_uid(_uid)
+    print "#"*20
+
+    # get_nodes_by_no
+    print nodesdb.get_nodes_by_no(_no)
+    print "#"*20
+
+    cursor_2 = nodesdb.secondary.cursor()
+    cursor_3 = nodesdb.third.cursor()
+    pdb.set_trace()
 
     # del_node
     nodesdb.del_node(_key)
     print nodesdb.get_nodes_by_uid(_uid)
+    print "#"*20
 
     nodesdb.close()
 
